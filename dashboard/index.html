@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kiro Account Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.1.0/dist/chartjs-plugin-annotation.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: system-ui, sans-serif; background: #f5f5f5; color: #333; }
+header { background: #1a1a2e; color: #fff; padding: 1rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+header h1 { font-size: 1.2rem; }
+#status { color: #aaa; font-size: 0.85rem; }
+.controls { display: flex; gap: 0.5rem; align-items: center; margin-left: auto; flex-wrap: wrap; }
+.controls select, .controls label { font-size: 0.85rem; }
+.controls select { padding: 0.4rem 0.6rem; border-radius: 4px; border: none; background: #2d2d44; color: #fff; outline: none; }
+.controls label { color: #ccc; cursor: pointer; display: flex; align-items: center; gap: 0.3rem; }
+.controls input[type="checkbox"] { width: 16px; height: 16px; accent-color: #4361ee; cursor: pointer; }
+.main { display: grid; grid-template-columns: 1fr 2fr; gap: 1rem; padding: 1rem; height: calc(100vh - 60px); }
+@media (max-width: 900px) { .main { grid-template-columns: 1fr; height: auto; } }
+.panel { background: #fff; border-radius: 8px; padding: 1rem; overflow: auto; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+th, td { padding: 0.5rem; text-align: left; border-bottom: 1px solid #eee; }
+th { background: #f9f9f9; position: sticky; top: 0; }
+th.sortable:hover { background: #e8ecf0; }
+tr:hover { background: #f0f4ff; }
+.chart-panel { display: flex; flex-direction: column; }
+.chart-panel canvas { flex: 1; min-height: 300px; }
+.empty { color: #999; text-align: center; padding: 3rem; }
+.error-banner { background: #fff3cd; border: 1px solid #ffc107; border-radius: 6px; padding: 0.75rem 1rem; margin: 1rem; color: #856404; font-size: 0.85rem; }
+.error-banner h3 { margin-bottom: 0.4rem; color: #d63384; }
+.error-banner ul { margin: 0.3rem 0 0 1.2rem; }
+.error-banner li { margin-bottom: 0.2rem; }
+#email-filter { width: 100%; padding: 0.5rem; margin-bottom: 0.5rem; border: 1px solid #ddd; border-radius: 4px; font-size: 0.85rem; }
+td input[type="checkbox"], th input[type="checkbox"] { width: 15px; height: 15px; accent-color: #4361ee; cursor: pointer; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Kiro Account Dashboard</h1>
+  <span id="status">Loading DB...</span>
+  <div class="controls">
+    <select id="range">
+      <option value="7">1 Week</option>
+      <option value="30">1 Month</option>
+      <option value="90" selected>3 Months</option>
+      <option value="180">6 Months</option>
+      <option value="365">1 Year</option>
+    </select>
+    <label><input type="checkbox" id="detailed"> Detailed</label>
+  </div>
+</header>
+<div id="error-banner"></div>
+<div class="main">
+  <div class="panel" id="table-panel"><input type="text" id="email-filter" placeholder="Filter by username..."><p class="empty">Load a .db file to begin</p></div>
+  <div class="panel chart-panel"><canvas id="chart"></canvas></div>
+</div>
+<script>
+let db, chart, allProfiles = [];
+
+(async () => {
+  const SQL = await initSqlJs({ locateFile: f => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${f}` });
+  const buf = await fetch('kiro_accounts.db').then(r => r.arrayBuffer());
+  db = new SQL.Database(new Uint8Array(buf));
+  document.getElementById('status').textContent = 'DB loaded';
+  renderErrors();
+  renderTable();
+  renderChart();
+})();
+
+document.getElementById('range').addEventListener('change', () => renderChart());
+document.getElementById('detailed').addEventListener('change', () => renderChart());
+
+function getSelectedProfiles() {
+  return [...document.querySelectorAll('.profile-check:checked')].map(cb => cb.value);
+}
+
+function renderErrors() {
+  const banner = document.getElementById('error-banner');
+  try {
+    const result = db.exec("SELECT profile_name, error_message, attempts, failed_at FROM scrape_errors ORDER BY failed_at DESC LIMIT 20");
+    if (!result.length || !result[0].values.length) { banner.innerHTML = ''; return; }
+    let html = '<div class="error-banner"><h3>⚠️ Scraping Errors</h3><ul>';
+    for (const [profile, error, attempts, time] of result[0].values) {
+      html += `<li><strong>${profile}</strong> — ${error} (${attempts} attempts, ${time.slice(0,16).replace('T',' ')})</li>`;
+    }
+    html += '</ul></div>';
+    banner.innerHTML = html;
+  } catch(e) { banner.innerHTML = ''; }
+}
+
+function renderTable(sortCol = 'username', sortDir = 'asc') {
+  const rows = db.exec("SELECT profile_name, email, plan_name, credits_used, credits_total, extracted_at FROM accounts");
+  const panel = document.getElementById('table-panel');
+  if (!rows.length || !rows[0].values.length) { panel.innerHTML = '<input type="text" id="email-filter" placeholder="Filter by username..."><p class="empty">No accounts found</p>'; return; }
+
+  // Sort data
+  const data = rows[0].values.slice();
+  const colIndex = { username: 1, plan: 2, credits: 3, remaining: -1, extracted: 5 };
+  const idx = colIndex[sortCol] ?? 1;
+  data.sort((a, b) => {
+    let va, vb;
+    if (sortCol === 'credits') {
+      const totalA = a[4] || 1, totalB = b[4] || 1;
+      va = (a[3] ?? 0) / totalA;
+      vb = (b[3] ?? 0) / totalB;
+    } else if (sortCol === 'remaining') {
+      va = (a[4] ?? 0) - (a[3] ?? 0);
+      vb = (b[4] ?? 0) - (b[3] ?? 0);
+    } else {
+      va = (a[idx] || '').toString().toLowerCase();
+      vb = (b[idx] || '').toString().toLowerCase();
+    }
+    if (va < vb) return sortDir === 'asc' ? -1 : 1;
+    if (va > vb) return sortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  allProfiles = data.map(r => r[0]);
+
+  const arrow = (col) => sortCol === col ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
+  let html = '<input type="text" id="email-filter" placeholder="Filter by username...">';
+  html += '<table><thead><tr>';
+  html += '<th><input type="checkbox" id="select-all"></th>';
+  html += `<th class="sortable" data-col="username" style="cursor:pointer">Username${arrow('username')}</th>`;
+  html += `<th class="sortable" data-col="plan" style="cursor:pointer">Plan${arrow('plan')}</th>`;
+  html += `<th class="sortable" data-col="credits" style="cursor:pointer">Credits${arrow('credits')}</th>`;
+  html += `<th class="sortable" data-col="remaining" style="cursor:pointer">Remaining${arrow('remaining')}</th>`;
+  html += `<th class="sortable" data-col="extracted" style="cursor:pointer">Last Extracted${arrow('extracted')}</th>`;
+  html += '</tr></thead><tbody>';
+
+  for (const r of data) {
+    const [profile, email, plan, used, total, time] = r;
+    const username = email ? email.split('@')[0] : 'N/A';
+    const creditsText = `${used??'?'}/${total??'?'}`;
+    let creditsColor = '';
+    if (total && total > 0 && used != null) {
+      const ratio = used / total;
+      if (ratio >= 1.0) creditsColor = '#9b59b6';
+      else if (ratio > 0.8) creditsColor = '#e63946';
+      else if (ratio > 0.5) creditsColor = '#f0ad4e';
+      else if (ratio > 0) creditsColor = '#2ecc71';
+      else creditsColor = '#00bcd4';
+    }
+    const creditsStyle = creditsColor ? ` style="color:${creditsColor};font-weight:600"` : '';
+    const remaining = (total != null && used != null) ? Math.ceil(total - used) : '?';
+    html += `<tr><td><input type="checkbox" class="profile-check" value="${profile}"></td><td>${username}</td><td>${plan||'N/A'}</td><td${creditsStyle}>${creditsText}</td><td${creditsStyle}>${remaining}</td><td>${time?time.slice(0,16).replace('T',' '):''}</td></tr>`;
+  }
+  html += '</tbody></table>';
+  panel.innerHTML = html;
+
+  // Sort click handlers
+  document.querySelectorAll('.sortable').forEach(th => {
+    th.addEventListener('click', () => {
+      const col = th.dataset.col;
+      const newDir = (col === sortCol && sortDir === 'asc') ? 'desc' : 'asc';
+      renderTable(col, newDir);
+    });
+  });
+
+  document.getElementById('select-all').addEventListener('change', e => {
+    document.querySelectorAll('.profile-check').forEach(cb => cb.checked = e.target.checked);
+    renderChart();
+  });
+  document.querySelectorAll('.profile-check').forEach(cb => cb.addEventListener('change', () => {
+    const all = document.querySelectorAll('.profile-check');
+    const checked = document.querySelectorAll('.profile-check:checked');
+    document.getElementById('select-all').checked = checked.length === all.length;
+    renderChart();
+  }));
+  document.getElementById('email-filter').addEventListener('input', e => {
+    const filter = e.target.value.toLowerCase();
+    document.querySelectorAll('#table-panel tbody tr').forEach(tr => {
+      const username = tr.children[1]?.textContent.toLowerCase() || '';
+      tr.style.display = username.includes(filter) ? '' : 'none';
+    });
+  });
+}
+
+function weekendAnnotations(labels) {
+  const ann = {};
+  labels.forEach((l, i) => {
+    const day = new Date(l).getDay();
+    if (day === 0 || day === 6) {
+      ann['w'+i] = { type: 'box', xMin: i - 0.5, xMax: i + 0.5, backgroundColor: 'rgba(200,200,200,0.15)', borderWidth: 0 };
+    }
+  });
+  return ann;
+}
+
+function renderChart() {
+  if (!db) return;
+  const selected = getSelectedProfiles();
+  const days = parseInt(document.getElementById('range').value);
+  const detailed = document.getElementById('detailed').checked;
+  const cutoff = new Date(Date.now() - days * 86400000).toISOString();
+
+  if (!selected.length) {
+    // Show aggregated total
+    let sql;
+    if (detailed) {
+      sql = "SELECT extracted_at, SUM(credits_used), SUM(credits_total) FROM credits_history WHERE extracted_at >= ? GROUP BY extracted_at ORDER BY extracted_at";
+    } else {
+      sql = "SELECT date(extracted_at) as d, SUM(credits_used), SUM(credits_total) FROM credits_history WHERE extracted_at >= ? GROUP BY date(extracted_at) ORDER BY d";
+    }
+    const result = db.exec(sql, [cutoff]);
+    const labels = [], usedData = [], remainingData = [];
+    if (result.length) {
+      for (const r of result[0].values) {
+        labels.push(detailed ? r[0].slice(0,16).replace('T',' ') : r[0].slice(0,10));
+        usedData.push(r[1]);
+        remainingData.push((r[2]||0) - (r[1]||0));
+      }
+    }
+    if (chart) chart.destroy();
+    const delta = remainingData.map((v, j) => j === 0 ? 0 : (remainingData[j-1] - v));
+    chart = new Chart(document.getElementById('chart'), {
+      type: 'line',
+      data: { labels, datasets: [
+        { label: 'Total Credits Used', data: usedData, borderColor: '#e63946', tension: 0.3 },
+        { label: 'Total Credits Remaining', data: remainingData, borderColor: '#2a9d8f', tension: 0.3 },
+        { type: 'bar', label: 'Consumed (interval)', data: delta, backgroundColor: '#e6394655', yAxisID: 'y1' }
+      ]},
+      options: { responsive: true, maintainAspectRatio: false, plugins: { title: { display: true, text: 'All Accounts (Aggregated)' }, annotation: { annotations: weekendAnnotations(labels) } }, scales: { x: { title: { display: true, text: 'Date' } }, y: { title: { display: true, text: 'Credits' }, beginAtZero: true }, y1: { position: 'right', title: { display: true, text: 'Consumed' }, beginAtZero: true, grid: { drawOnChartArea: false } } } }
+    });
+    return;
+  }
+
+  // Get email mapping
+  const emailMap = {};
+  const em = db.exec("SELECT profile_name, email FROM accounts");
+  if (em.length) em[0].values.forEach(r => emailMap[r[0]] = r[1] || r[0]);
+
+  const colors = ['#e63946','#2a9d8f','#4361ee','#f77f00','#7209b7','#06d6a0','#ef476f','#118ab2'];
+  const datasets = [];
+
+  for (let i = 0; i < selected.length; i++) {
+    const profile = selected[i];
+    let sql;
+    if (detailed) {
+      sql = "SELECT extracted_at, credits_used, credits_total FROM credits_history WHERE profile_name = ? AND extracted_at >= ? ORDER BY extracted_at";
+    } else {
+      sql = "SELECT date(extracted_at) as d, credits_used, credits_total FROM credits_history WHERE profile_name = ? AND extracted_at >= ? GROUP BY date(extracted_at) HAVING extracted_at = MAX(extracted_at) ORDER BY d";
+    }
+    const result = db.exec(sql, [profile, cutoff]);
+    const data = [];
+    if (result.length) {
+      for (const r of result[0].values) {
+        data.push({ x: detailed ? r[0].slice(0,16).replace('T',' ') : r[0].slice(0,10), y: (r[2]||0) - (r[1]||0) });
+      }
+    }
+    datasets.push({ label: emailMap[profile], data: data.map(d => d.y), borderColor: colors[i % colors.length], tension: 0.3 });
+  }
+
+  // Use longest label set
+  let labels = [];
+  for (let i = 0; i < selected.length; i++) {
+    const profile = selected[i];
+    let sql;
+    if (detailed) {
+      sql = "SELECT extracted_at FROM credits_history WHERE profile_name = ? AND extracted_at >= ? ORDER BY extracted_at";
+    } else {
+      sql = "SELECT date(extracted_at) as d FROM credits_history WHERE profile_name = ? AND extracted_at >= ? GROUP BY date(extracted_at) ORDER BY d";
+    }
+    const result = db.exec(sql, [profile, cutoff]);
+    if (result.length && result[0].values.length > labels.length) {
+      labels = result[0].values.map(r => detailed ? r[0].slice(0,16).replace('T',' ') : r[0].slice(0,10));
+    }
+  }
+
+  // Add delta bar datasets
+  const deltaDatasets = datasets.map((ds, i) => {
+    const delta = ds.data.map((v, j) => j === 0 ? 0 : (ds.data[j-1] - v));
+    return { type: 'bar', label: ds.label + ' (consumed)', data: delta, backgroundColor: ds.borderColor + '55', yAxisID: 'y1' };
+  });
+
+  if (chart) chart.destroy();
+  chart = new Chart(document.getElementById('chart'), {
+    type: 'line',
+    data: { labels, datasets: [...datasets, ...deltaDatasets] },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { title: { display: true, text: 'Credits Remaining & Consumed' }, annotation: { annotations: weekendAnnotations(labels) } },
+      scales: { x: { title: { display: true, text: 'Date' } }, y: { title: { display: true, text: 'Remaining' }, beginAtZero: true }, y1: { position: 'right', title: { display: true, text: 'Consumed' }, beginAtZero: true, grid: { drawOnChartArea: false } } }
+    }
+  });
+}
+</script>
+</body>
+</html>
