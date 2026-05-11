@@ -18,11 +18,11 @@ header h1 { font-size: 1.2rem; }
 .controls select { padding: 0.4rem 0.6rem; border-radius: 4px; border: none; background: #2d2d44; color: #fff; outline: none; }
 .controls label { color: #ccc; cursor: pointer; display: flex; align-items: center; gap: 0.3rem; }
 .controls input[type="checkbox"] { width: 16px; height: 16px; accent-color: #4361ee; cursor: pointer; }
-.main { display: grid; grid-template-columns: 1fr 2fr; gap: 1rem; padding: 1rem; height: calc(100vh - 60px); }
-@media (max-width: 900px) { .main { grid-template-columns: 1fr; height: auto; } }
+.main { display: grid; grid-template-columns: 3fr 4fr; gap: 1rem; padding: 1rem; height: calc(100vh - 60px); }
+@media (max-width: 1100px) { .main { grid-template-columns: 1fr; height: auto; } }
 .panel { background: #fff; border-radius: 8px; padding: 1rem; overflow: auto; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-th, td { padding: 0.5rem; text-align: left; border-bottom: 1px solid #eee; }
+table { width: 100%; border-collapse: collapse; font-size: 0.82rem; table-layout: auto; }
+th, td { padding: 0.4rem 0.5rem; text-align: left; border-bottom: 1px solid #eee; white-space: nowrap; }
 th { background: #f9f9f9; position: sticky; top: 0; }
 th.sortable:hover { background: #e8ecf0; }
 tr:hover { background: #f0f4ff; }
@@ -91,14 +91,49 @@ function renderErrors() {
   } catch(e) { banner.innerHTML = ''; }
 }
 
+function getDailyUsageMap() {
+  // Calculate daily credit usage per profile by comparing today's credits_used with the previous day's last record
+  const today = new Date().toISOString().slice(0, 10);
+  const usageMap = {};
+  try {
+    // Get today's latest credits_used per profile
+    const todayResult = db.exec(
+      "SELECT profile_name, credits_used FROM credits_history WHERE date(extracted_at) = ? GROUP BY profile_name HAVING extracted_at = MAX(extracted_at)",
+      [today]
+    );
+    if (!todayResult.length) return usageMap;
+
+    for (const [profile, todayUsed] of todayResult[0].values) {
+      // Get the last record before today for this profile
+      const prevResult = db.exec(
+        "SELECT credits_used FROM credits_history WHERE profile_name = ? AND date(extracted_at) < ? ORDER BY extracted_at DESC LIMIT 1",
+        [profile, today]
+      );
+      if (prevResult.length && prevResult[0].values.length) {
+        const prevUsed = prevResult[0].values[0][0];
+        if (todayUsed != null && prevUsed != null) {
+          const delta = todayUsed - prevUsed;
+          usageMap[profile] = delta >= 0 ? delta : todayUsed; // If negative (reset happened), show today's used as daily usage
+        }
+      } else {
+        // No previous day data, show today's credits_used as daily usage
+        usageMap[profile] = todayUsed ?? 0;
+      }
+    }
+  } catch(e) { /* silently fail */ }
+  return usageMap;
+}
+
 function renderTable(sortCol = 'username', sortDir = 'asc') {
   const rows = db.exec("SELECT profile_name, email, plan_name, credits_used, credits_total, extracted_at FROM accounts");
   const panel = document.getElementById('table-panel');
   if (!rows.length || !rows[0].values.length) { panel.innerHTML = '<input type="text" id="email-filter" placeholder="Filter by username..."><p class="empty">No accounts found</p>'; return; }
 
+  const dailyUsageMap = getDailyUsageMap();
+
   // Sort data
   const data = rows[0].values.slice();
-  const colIndex = { username: 1, plan: 2, credits: 3, remaining: -1, extracted: 5 };
+  const colIndex = { username: 1, plan: 2, credits: 3, remaining: -1, daily: -2, extracted: 5 };
   const idx = colIndex[sortCol] ?? 1;
   data.sort((a, b) => {
     let va, vb;
@@ -109,6 +144,9 @@ function renderTable(sortCol = 'username', sortDir = 'asc') {
     } else if (sortCol === 'remaining') {
       va = (a[4] ?? 0) - (a[3] ?? 0);
       vb = (b[4] ?? 0) - (b[3] ?? 0);
+    } else if (sortCol === 'daily') {
+      va = dailyUsageMap[a[0]] ?? -1;
+      vb = dailyUsageMap[b[0]] ?? -1;
     } else {
       va = (a[idx] || '').toString().toLowerCase();
       vb = (b[idx] || '').toString().toLowerCase();
@@ -128,6 +166,7 @@ function renderTable(sortCol = 'username', sortDir = 'asc') {
   html += `<th class="sortable" data-col="plan" style="cursor:pointer">Plan${arrow('plan')}</th>`;
   html += `<th class="sortable" data-col="credits" style="cursor:pointer">Credits${arrow('credits')}</th>`;
   html += `<th class="sortable" data-col="remaining" style="cursor:pointer">Remaining${arrow('remaining')}</th>`;
+  html += `<th class="sortable" data-col="daily" style="cursor:pointer">Daily Usage${arrow('daily')}</th>`;
   html += `<th class="sortable" data-col="extracted" style="cursor:pointer">Last Extracted${arrow('extracted')}</th>`;
   html += '</tr></thead><tbody>';
 
@@ -146,7 +185,10 @@ function renderTable(sortCol = 'username', sortDir = 'asc') {
     }
     const creditsStyle = creditsColor ? ` style="color:${creditsColor};font-weight:600"` : '';
     const remaining = (total != null && used != null) ? Math.ceil(total - used) : '?';
-    html += `<tr><td><input type="checkbox" class="profile-check" value="${profile}"></td><td>${username}</td><td>${plan||'N/A'}</td><td${creditsStyle}>${creditsText}</td><td${creditsStyle}>${remaining}</td><td>${time?time.slice(0,16).replace('T',' '):''}</td></tr>`;
+    const dailyUsage = dailyUsageMap[profile];
+    const dailyText = dailyUsage != null ? Math.round(dailyUsage) : '—';
+    const dailyStyle = dailyUsage != null && dailyUsage > 0 ? ' style="color:#e67e22;font-weight:600"' : '';
+    html += `<tr><td><input type="checkbox" class="profile-check" value="${profile}"></td><td>${username}</td><td>${plan||'N/A'}</td><td${creditsStyle}>${creditsText}</td><td${creditsStyle}>${remaining}</td><td${dailyStyle}>${dailyText}</td><td>${time?time.slice(0,16).replace('T',' '):''}</td></tr>`;
   }
   html += '</tbody></table>';
   panel.innerHTML = html;

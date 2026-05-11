@@ -69,13 +69,18 @@
 
 - [x] 8.1 Create `dashboard/index.html` with basic layout: left panel (table), right panel (chart area), time range selector, detailed toggle
 - [x] 8.2 Integrate sql.js (CDN) to load and query SQLite `.db` file fetched from public path (same directory)
-- [x] 8.3 Implement accounts table rendering: query `accounts` table, display email, plan, credits used/total, last extracted time
+- [x] 8.3 Implement accounts table rendering: query `accounts` table, display username, plan, credits used/total, remaining, daily usage, last extracted time
+- [x] 8.3.1 Implement `getDailyUsageMap()` function that calculates daily credit consumption per profile by comparing today's `credits_used` with previous day's last record from `credits_history`
+- [x] 8.3.2 Handle credit reset edge case (negative delta) by showing today's `credits_used` as daily usage
+- [x] 8.3.3 Add "Daily Usage" sortable column header with sort logic
 - [x] 8.4 Integrate Chart.js (CDN) with mixed chart: line for credits remaining, bar for credits consumed per interval (dual y-axis)
 - [x] 8.5 Implement time range filtering logic: calculate date cutoff for week/month/3months/6months/year, filter SQL query by `extracted_at`
 - [x] 8.6 Implement daily deduplication: by default GROUP BY date and take last record per day per profile (show date only); when detailed toggle is on, show all records with full datetime
 - [x] 8.7 Implement account checkbox selection: unselect all = aggregated view; select accounts = one line per account on chart
 - [x] 8.8 Highlight weekend dates on chart using chartjs-plugin-annotation
 - [x] 8.9 Style the dashboard with basic CSS (responsive layout, table hover, header controls styled for dark background)
+- [x] 8.10 Adjust grid layout to 3fr/4fr ratio and responsive breakpoint to 1100px to accommodate additional columns without layout overflow
+- [x] 8.11 Add `white-space: nowrap` and compact font/padding to table cells to prevent text wrapping in multi-column layout
 
 ## Task 9: Integration and Final Verification
 

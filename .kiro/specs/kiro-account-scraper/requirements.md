@@ -89,7 +89,7 @@ Công cụ Python tự động hóa việc trích xuất thông tin tài khoản
 #### Acceptance Criteria
 
 1. THE tool SHALL provide a static HTML dashboard (`dashboard/index.html`) that fetches the SQLite DB file from the same public directory
-2. THE dashboard SHALL display a table of all accounts on the left panel showing: email, plan, credits used/total, last extracted time
+2. THE dashboard SHALL display a table of all accounts on the left panel showing: username, plan, credits used/total, remaining credits, daily usage, last extracted time
 3. WHEN the dashboard loads, THE right panel SHALL display a chart showing total credits remaining and total credits across all accounts over time
 4. WHEN a user clicks on an account in the left panel, THE right panel SHALL display the credits history chart for that specific account
 5. THE chart SHALL default to showing data from the last 3 months
@@ -99,6 +99,10 @@ Công cụ Python tự động hóa việc trích xuất thông tin tài khoản
 9. WHEN a time range is selected, THE chart SHALL update to show data within the selected period
 10. THE dashboard SHALL display a warning banner showing recent scraping errors from the `scrape_errors` table in the database
 11. THE dashboard SHALL provide an email filter input above the accounts table that filters rows by email substring match in real-time
+12. THE dashboard SHALL display a "Daily Usage" column showing the number of credits consumed today per account, calculated as the difference between today's latest `credits_used` and the previous day's last `credits_used` from `credits_history`
+13. IF a credit reset occurs (today's `credits_used` is less than yesterday's), THEN THE dashboard SHALL display today's `credits_used` as the daily usage value
+14. IF no previous day data exists for a profile, THEN THE dashboard SHALL display today's `credits_used` as the daily usage
+15. THE dashboard table SHALL support sorting by the "Daily Usage" column
 
 ### Requirement 9: Retry Queue và Error Logging
 

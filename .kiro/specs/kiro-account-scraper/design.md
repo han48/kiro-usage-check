@@ -201,12 +201,14 @@ class SummaryReporter:
 - DB file được fetch từ public path (cùng thư mục với dashboard.html)
 
 **Layout:**
-- Left panel: Accounts table (email, plan, credits used/total, last extracted)
+- Left panel: Accounts table (username, plan, credits used/total, remaining, daily usage, last extracted)
 - Right panel: Chart.js line chart
 - Default view: Tổng credits remaining & total across all accounts
 - Click account → chart riêng của account đó
 - Time range selector: 1 tuần, 1 tháng, 3 tháng (default), 6 tháng, 1 năm
 - Detailed toggle: all records per day vs last record only
+- Grid layout: 3fr (table) / 4fr (chart) để đủ chỗ cho nhiều cột
+- Responsive breakpoint: 1100px chuyển sang single column
 
 ```javascript
 // Pseudo-code flow
@@ -214,9 +216,14 @@ class SummaryReporter:
 // 2. sql.js opens the database in memory
 // 3. Query scrape_errors table → render warning banner if errors exist
 // 4. Query accounts table → render left panel
-// 5. Query credits_history → render chart
-// 6. Click account → filter chart by profile_name
-// 7. Time range / detailed toggle → re-query and re-render chart
+// 5. Calculate daily usage per profile:
+//    - Query today's latest credits_used per profile from credits_history
+//    - Query previous day's last credits_used per profile
+//    - Daily usage = today's credits_used - previous day's credits_used
+//    - Handle credit resets (negative delta → use today's credits_used)
+// 6. Query credits_history → render chart
+// 7. Click account → filter chart by profile_name
+// 8. Time range / detailed toggle → re-query and re-render chart
 ```
 
 ## Data Models
